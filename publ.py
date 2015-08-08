@@ -1,6 +1,7 @@
 import argparse
 import logging
 import requests
+import os
 import SimpleHTTPServer
 import SocketServer
 import sys
@@ -8,8 +9,7 @@ import urlparse
 import webbrowser
 
 from bs4 import BeautifulSoup
-from configparser import ConfigParser
-from os import path, environ
+from configparser import ConfigParser, DuplicateSectionError
 
 if sys.version < '3':
     from urlparse import parse_qs
@@ -22,11 +22,16 @@ APPNAME = "publ"
 
 if sys.platform == "darwin":
     from AppKit import NSSearchPathForDirectoriesInDomains
-    appdata = path.join(NSSearchPathForDirectoriesInDomains(14, 1, True)[0], APPNAME)
+    appdata = os.path.join(NSSearchPathForDirectoriesInDomains(14, 1, True)[0], APPNAME)
 elif sys.platform == 'win32':
-    appdata = path.join(environ['APPDATA'], APPNAME)
+    appdata = os.path.join(os.environ['APPDATA'], APPNAME)
 else:
-    appdata = path.expanduser(path.join("~", "." + APPNAME))
+    appdata = os.path.expanduser(os.path.join("~", "." + APPNAME))
+
+try:
+    os.stat(appdata)
+except:
+    os.mkdir(appdata)
 
 logger = logging.getLogger(__name__)
 returned_data = ""
@@ -43,6 +48,9 @@ class OAuthHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write("<html><h1>Please close this browser and return to publ</h1></html>")
         returned_data = data
+
+    def log_request(self, code='-', size='-'):
+        pass
 
 
 def configure(args):
@@ -78,16 +86,45 @@ def configure(args):
         httpd.handle_request()
 
     data = parse_qs(returned_data)
-    print "Code: ", data['code'][0]
-    print "Me: ", data['me'][0]
-
     config = ConfigParser()
-    config.add_section(data['me'][0])
+
+    # Read any existing config
+    try:
+        with open(os.path.join(appdata, "publ.ini"), 'r+b') as configfile:
+            config.read_file(configfile)
+    except IOError:
+        pass
+
+    try:
+        config.add_section(data['me'][0])
+    except DuplicateSectionError:
+        # We're not actually going to do anything except let the user know we're about to overwrite the data
+        print "This site already exists in the config, updating the information"
+
     config.set(data['me'][0], 'code', data['code'][0])
     config.set(data['me'][0], 'micropub', micropub_endpoint)
     config.set(data['me'][0], 'auth', auth_endpoint)
     config.set(data['me'][0], 'token', token_endpoint)
 
+
+    default_site = ""
+    while default_site.lower() not in ['y', 'n']:
+        default_site = raw_input("Make %s the default site for publ? [Y/n] " % data['me'][0])
+        if not default_site:
+            default_site = "y"
+
+    if default_site.lower() == "y":
+        # Add the publ section if
+        try:
+            config.add_section('publ')
+        except DuplicateSectionError:
+            pass
+        config.set('publ', 'default_site', data['me'][0])
+
+    with open(os.path.join(appdata, "publ.ini"), 'w+b') as configfile:
+        config.write(configfile)
+
+    print "Done!"
     return
 
 

@@ -10,6 +10,7 @@ import webbrowser
 
 from bs4 import BeautifulSoup
 from configparser import ConfigParser, DuplicateSectionError
+from subprocess import call
 
 if sys.version < '3':
     from urlparse import parse_qs
@@ -58,6 +59,7 @@ def format_site(site):
     if not url.scheme:
         site = "http://" + site
     return site
+
 
 def configure(args):
     site = format_site(args.site)
@@ -156,27 +158,57 @@ def publish(args):
         print "The publ config file does not exist, please configure a site with publ config [site] before continuing"
         sys.exit(1)
 
+    if args.editor:
+        fname = os.path.join(appdata, "tmp_publ_post.txt")
+        open(fname, 'a').close()
+        if sys.platform == "win32":
+            os.system(fname)
+        elif sys.platform == "darwin":
+            raise NotImplemented("OS X Editor Feature Not Implemented")
+        else:
+            EDITOR = os.environ.get('EDITOR') if os.environ.get('EDITOR') else 'vim'
+            call([EDITOR, fname])
+        with open(fname) as newfile:
+            content = newfile.read()
+        os.remove(fname)
+    else:
+        content = " ".join(args.content)
+
     if args.site:
         site = args.site
     elif "publ" in config and "default_site" in config['publ']:
         site = config['publ']['default_site']
 
-    print "publish to " + site
-    print " ".join(args.content)
+    print "Publishing the following content to " + site
+    print content
 
     if site not in config:
         print "The site specified is not configured, please run publ config " + site
         sys.exit(2)
 
     mpub_endpoint = config[site]['micropub']
+    payload = {
+        'h': 'entry',
+        'content': content
+    }
+
+    if args.name:
+        payload['name'] = args.name
+
+    if args.slug:
+        payload['slug'] = args.slug
 
     mpub = requests.post(
         mpub_endpoint,
-        headers={'Authorization': 'Bearer ' + config[site]['access_token']},
-        data={'content': args.content}
+        headers={
+            'Authorization': 'Bearer ' + config[site]['access_token'],
+            'Content-type': 'application/x-www-form-urlencoded'
+        },
+        data=payload
     )
     print mpub_endpoint, mpub.status_code
-    print mpub.text
+    if mpub.status_code == 201:
+        print mpub.headers['Location']
 
     return
 
@@ -187,6 +219,11 @@ def main():
 
     publ_parser = subparsers.add_parser('post')
     publ_parser.add_argument("-s", "--site", dest="site", help="Site to publish to")
+    publ_parser.add_argument("-e", "--editor", action="store_true",
+                             help="Open an editor rather than taking command line arguments")
+    publ_parser.add_argument("-l", "--slug", dest="slug", help="Slug for the post")
+    publ_parser.add_argument("-n", "--name", dest="name",
+                             help="Set the name for the post. Most be enclosed in quotes.")
     publ_parser.add_argument('content', nargs=argparse.REMAINDER)
     publ_parser.set_defaults(func=publish)
 
